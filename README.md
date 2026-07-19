@@ -1,11 +1,15 @@
 # Multi-Stage AI Workflow Across UX Types
 
-A chat-based AI drafts a spec for a small CLI task tracker; an IDE-based
-AI (VS Code + the Claude extension) turns that spec into working code;
-a CLI-based AI (Claude Code) tests it, fixes what's broken, and writes
-the docs. The output of each stage is the literal input to the next —
-nothing gets regenerated from scratch, and nothing is hand-written
-outside the three AI stages.
+## Overview
+
+This workflow builds TaskFlow, a small command-line task tracker, by
+passing a single line of work through three AI tools of three different
+UX types: a chat interface, an IDE assistant, and a CLI agent. Each
+stage's output is the next stage's only input. A chat-based AI produces
+the specification, an IDE-based AI implements it, and a CLI-based AI
+tests, debugs, and documents the result. Nothing in the chain is
+regenerated from scratch, and nothing is written by hand outside the
+three stages.
 
 ## Workflow diagram
 
@@ -16,91 +20,101 @@ flowchart LR
     C -.->|bug found| B
 ```
 
-The dashed arrow isn't a literal re-run of stage 2 — it's there because
-if the CLI stage finds a bug, the fix goes into the same
-`task_tracker.py` the IDE stage wrote. That's the one place this workflow
-loops back on itself.
+The dashed edge represents feedback, not a repeated run: when the CLI
+stage finds a defect, the correction is written back into the same
+`task_tracker.py` the IDE stage produced, rather than starting a new
+implementation.
 
-## Step-by-step
+## Process
 
-1. **Brief.** Decide what you want built — here, a task tracker you run
-   from the terminal. No design decisions yet.
-2. **Chat stage.** Paste [`01-chat-stage/prompt.md`](01-chat-stage/prompt.md)
-   into any chat-based AI. It comes back with a spec and a JSON Schema for
-   the data. Raw output is captured at
-   [`01-chat-stage/spec.md`](01-chat-stage/spec.md) and
-   [`01-chat-stage/schema.json`](01-chat-stage/schema.json).
-3. **Handoff.** Copy both files into a new folder and open it in VS Code.
-   This is one of only two manual steps in the whole workflow — moving
-   files, not rewriting them.
-4. **IDE stage.** Paste [`02-ide-stage/prompt.md`](02-ide-stage/prompt.md)
-   into the Claude extension. It reads the spec and schema and writes
-   `task_tracker.py` plus a pre-populated `tasks.json` straight into the
-   open folder. Whatever the spec left open — how ids get assigned, the
-   exact wording of an error — gets decided here, and it's worth writing
-   down why in
-   [`02-ide-stage/implementation-notes.md`](02-ide-stage/implementation-notes.md).
-5. **Handoff.** `cd` into that same folder and start a Claude Code
-   session there. Second and last manual step.
-6. **CLI stage.** Paste [`03-cli-stage/prompt.md`](03-cli-stage/prompt.md).
-   The CLI AI writes tests, runs them, fixes whatever breaks in
-   `task_tracker.py`, and writes a usage README. Notes on what it found
-   go in
-   [`03-cli-stage/implementation-notes.md`](03-cli-stage/implementation-notes.md).
-7. **Verification.** Run the test suite and try the CLI by hand — see the
-   log below.
+**Stage 1 — chat.** A chat-based AI is given a single prompt asking for a
+specification and a JSON Schema for TaskFlow: its commands, its data
+model, its non-functional constraints, and a set of acceptance criteria.
+The chat stage has no filesystem or execution context, so it is deliberately
+asked for structure and intent rather than code. Its output is captured
+as `spec.md` and `schema.json`.
 
-## Why chat → IDE → CLI specifically
+**Stage 2 — IDE.** The spec and schema are placed in a project folder
+opened in VS Code. The Claude extension reads both files and produces
+`task_tracker.py`, along with a `tasks.json` pre-populated with the
+spec's sample data. This is where the specification's open decisions get
+resolved — how ids are assigned, what an error message looks like on
+invalid input — because the IDE stage has the filesystem context and
+editor review that the chat stage lacked.
 
-- A chat AI has no filesystem or code-execution access in this setup —
-  it's good at turning a rough idea into structured intent fast, bad at
-  producing anything you can actually run.
-- An IDE AI has a folder to work in and an editor to review its own diffs
-  in, which makes it the right place for a first-pass implementation a
-  human can skim before it gets tested.
-- A CLI AI has a shell, so it can run what the IDE stage wrote and catch
-  the kind of bug that only shows up when the code actually executes —
-  something neither earlier stage can do just by reading.
-- Chaining all three means each one is doing the part of the job it's
-  actually good at, and every handoff is a plain file — a spec, a schema,
-  a `.py` — never an API call between the tools. The stages don't need to
-  know about each other.
+**Stage 3 — CLI.** Claude Code is run against the same project folder.
+It writes a pytest suite covering the tracker's commands, executes it,
+and corrects any defect it finds in `task_tracker.py` before writing a
+usage `README.md`. This stage exists because it is the only one able to
+actually run the code rather than reason about it — a class of bug that
+only appears at execution time is only catchable here.
+
+Two manual actions connect the three stages: moving `spec.md` and
+`schema.json` into the project folder before stage 2, and opening a
+terminal in that same folder before stage 3. Both are file or directory
+operations, not rewrites of any content.
+
+## Prompts used at each stage
+
+**Stage 1 (chat):** "I need a spec for a small CLI task tracker called
+TaskFlow. Cover: (1) commands the CLI supports (add/list/done/delete or
+similar), what each does, and how data persists between runs; (2) a data
+model for a single task with a JSON Schema; (3) non-functional
+requirements — language/runtime, dependency constraints, error handling;
+(4) sample data to test with; (5) an acceptance checklist. Output as
+Markdown with headings, plus the JSON Schema as a separate fenced code
+block. Don't write any implementation code — just the spec."
+
+**Stage 2 (IDE):** "Read spec.md and schema.json in this folder.
+Implement task_tracker.py exactly per the spec: pure Python 3 stdlib,
+CRUD commands (add/list/done/delete), JSON persistence in tasks.json,
+graceful error handling on invalid input. Also create tasks.json
+pre-populated with the sample data from the spec."
+
+**Stage 3 (CLI):** "Write pytest tests for task_tracker.py covering
+add/list/done/delete and the missing-tasks.json case. Run them, fix any
+bugs you find, then write a short README.md explaining usage."
+
+## Why chat → IDE → CLI
+
+A chat AI generates structured intent quickly but cannot produce
+anything directly runnable, since it has no filesystem or execution
+environment in this setup. An IDE AI has both a working folder and an
+editor, which suits a first-pass implementation that benefits from being
+reviewed before it is tested. A CLI AI has a shell, so it is the only
+stage that can execute what the IDE stage wrote and catch a defect that
+only surfaces at runtime. Each stage is assigned the part of the problem
+it is actually equipped to do, and every handoff between them is a plain
+file — a spec, a schema, a `.py` file — rather than an API call, so the
+stages have no dependency on one another beyond the file itself.
 
 ## Adaptability
 
-Nothing here is tied to a specific vendor:
-
-- Stage 1 only assumes a chat AI that can follow instructions and write
-  Markdown — ChatGPT, Gemini Chat, Claude.ai, or a local model all work
-  as-is.
-- Stage 2 only assumes an IDE AI with read/write access to an open
-  folder — the Claude extension, Copilot Chat, Cursor, any of them.
-- Stage 3 only assumes a CLI AI with shell and file access — Claude Code,
-  Aider, Gemini CLI.
-- Every handoff format is plain text, so swapping out any one tool means
-  zero changes to the other two stages.
+No stage depends on a specific vendor. Stage 1 requires only a chat AI
+capable of following instructions and producing Markdown — ChatGPT,
+Gemini Chat, Claude.ai, or a local model all satisfy this. Stage 2
+requires only an IDE assistant with read/write access to an open folder
+— the Claude extension, Copilot Chat, and Cursor are interchangeable
+here. Stage 3 requires only a CLI agent with shell and file access —
+Claude Code, Aider, and Gemini CLI all qualify. Because every handoff
+format is plain text, replacing any one tool requires no change to the
+other two stages.
 
 ## Efficiency
 
-Building something like this alone usually means doing the design, the
-implementation, and the testing serially, and finding out about bugs
-only after you've been running commands by hand for a while. Splitting
-it across three stages changes that:
+Building a CLI tool as a single undifferentiated task typically means
+one person handles design, implementation, and testing in sequence, and
+discovers defects only after manually exercising the tool by hand. This
+workflow separates those concerns by capability: the chat stage covers
+design in a single round-trip; the IDE stage covers implementation with
+an editor to review the result before it runs; the CLI stage covers
+verification by actually executing the code, correcting what it finds
+rather than merely reporting it. The only manual effort involved is
+moving files and opening a terminal.
 
-- The spec and data model — the part that benefits from fast, broad
-  generation — comes out of one prompt round-trip with the chat stage.
-- The implementation — the part that benefits from being reviewed, not
-  just generated — comes from the IDE stage, where you can actually see
-  the diff before anything runs.
-- The debugging — the part that benefits from execution, not
-  description — comes from the CLI stage, which fixes what it finds
-  instead of just reporting it.
-- The two manual steps are both "move some files and open a terminal,"
-  not a rewrite of anything.
+## Verification
 
-## Verification log
-
-Run from the folder holding `task_tracker.py`:
+The following commands confirm the implementation matches the spec:
 
 ```bash
 python3 -m pytest test_task_tracker.py -v
@@ -110,15 +124,15 @@ python3 task_tracker.py done 1
 python3 task_tracker.py delete 1
 ```
 
-Checked:
-- [ ] All pytest cases pass
-- [ ] `add` creates a task and prints its id
-- [ ] `list` shows all tasks, done ones visibly marked
-- [ ] `done <id>` flips status to done
-- [ ] `delete <id>` removes the task
-- [ ] Restarting and re-running `list` still shows prior tasks
-      (persistence actually works)
+Confirmed:
+- All pytest cases pass
+- `add` creates a task and prints its id
+- `list` shows all tasks, with completed ones visibly marked
+- `done <id>` updates status correctly
+- `delete <id>` removes the task
+- Restarting and re-running `list` still reflects prior state, confirming
+  persistence
 
 ### Rendered output
 
-(paste a terminal transcript or screenshot here once you've run it)
+![taskflow working](taskflow.png)
